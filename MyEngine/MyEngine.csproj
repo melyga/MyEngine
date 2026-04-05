@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BulletSharp" Version="0.11.1" />
+    <PackageReference Include="BulletSharpPInvoke" Version="3.3.0.8617-preview" />
     <PackageReference Include="DefaultEcs" Version="0.17.2" />
     <PackageReference Include="SharpDX.XAudio2" Version="4.2.0" />
     <PackageReference Include="Silk.NET" Version="2.23.0" />

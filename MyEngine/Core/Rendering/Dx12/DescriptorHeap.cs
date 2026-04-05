@@ -52,7 +52,7 @@ internal sealed unsafe class DescriptorHeap : IDisposable
     /// </param>
     public DescriptorHeap(
         RenderContext             ctx,
-        D3D12_DESCRIPTOR_HEAP_TYPE type,
+        DescriptorHeapType        type,
         int                       capacity,
         bool                      shaderVisible)
     {
@@ -65,7 +65,7 @@ internal sealed unsafe class DescriptorHeap : IDisposable
         DescriptorHeapDesc desc = new()
         {
             NumDescriptors = (uint)capacity,
-            Type           = (DescriptorHeapType)type,
+            Type           = type,
             Flags          = shaderVisible
                                  ? DescriptorHeapFlags.ShaderVisible
                                  : DescriptorHeapFlags.None,
@@ -79,7 +79,7 @@ internal sealed unsafe class DescriptorHeap : IDisposable
 
         _heap = new ComPtr<ID3D12DescriptorHeap>((ID3D12DescriptorHeap*)ptr);
 
-        _stride  = ctx.Device->GetDescriptorHandleIncrementSize((DescriptorHeapType)type);
+        _stride  = ctx.Device->GetDescriptorHandleIncrementSize(type);
         _cpuBase = _heap.Handle->GetCPUDescriptorHandleForHeapStart();
         _gpuBase = shaderVisible
                        ? _heap.Handle->GetGPUDescriptorHandleForHeapStart()

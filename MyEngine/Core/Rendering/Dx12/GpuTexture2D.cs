@@ -279,7 +279,7 @@ internal sealed unsafe class GpuTexture2D : IDisposable
                     using ManualResetEventSlim mre = new(false);
                     nint hEvent = mre.WaitHandle.SafeWaitHandle.DangerousGetHandle();
                     SilkMarshal.ThrowHResult(
-                        fence.Handle->SetEventOnCompletion(signalValue, hEvent));
+                        fence.Handle->SetEventOnCompletion(signalValue, (void*)hEvent));
                     mre.Wait();
                 }
 

@@ -6,6 +6,7 @@ using System.Threading;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
+using Dx12Range = Silk.NET.Direct3D12.Range;
 
 namespace MyEngine.Core.Rendering.Dx12;
 
@@ -18,6 +19,18 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
     // ── Внутренний вид буфера ─────────────────────────────────────────────────
 
     private enum BufferKind { Vertex, Index, Constant, Structured }
+
+    private readonly struct PersistentMappedAllocation
+    {
+        public PersistentMappedAllocation(ComPtr<ID3D12Resource> resource, void* mappedPtr)
+        {
+            Resource = resource;
+            MappedPtr = mappedPtr;
+        }
+
+        public ComPtr<ID3D12Resource> Resource { get; }
+        public void* MappedPtr { get; }
+    }
 
     // ── Поля ─────────────────────────────────────────────────────────────────
 
@@ -144,11 +157,10 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
         int rawBytes    = sizeof(T) * elementCount;
         int alignedSize = AlignTo256(rawBytes);
 
-        (ComPtr<ID3D12Resource> res, void* mapped) =
-            AllocatePersistentMapped(ctx, alignedSize);
+        PersistentMappedAllocation allocation = AllocatePersistentMapped(ctx, alignedSize);
 
         return new GpuBuffer<T>(
-            res, mapped, BufferKind.Constant,
+            allocation.Resource, allocation.MappedPtr, BufferKind.Constant,
             alignedSize, elementCount,
             default, default);
     }
@@ -164,11 +176,10 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
 
         int sizeInBytes = sizeof(T) * elementCount;
 
-        (ComPtr<ID3D12Resource> res, void* mapped) =
-            AllocatePersistentMapped(ctx, sizeInBytes);
+        PersistentMappedAllocation allocation = AllocatePersistentMapped(ctx, sizeInBytes);
 
         return new GpuBuffer<T>(
-            res, mapped, BufferKind.Structured,
+            allocation.Resource, allocation.MappedPtr, BufferKind.Structured,
             sizeInBytes, elementCount,
             default, default);
     }
@@ -209,7 +220,7 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
 
         if (_mappedPtr != null)
         {
-            _resource.Handle->Unmap(0, (Range*)null);
+            _resource.Handle->Unmap(0, (Dx12Range*)null);
             _mappedPtr = null;
         }
 
@@ -236,12 +247,12 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
 
         void* uploadPtr;
         SilkMarshal.ThrowHResult(
-            upload.Handle->Map(0, (Range*)null, &uploadPtr));
+            upload.Handle->Map(0, (Dx12Range*)null, &uploadPtr));
 
         fixed (T* src = data)
             Unsafe.CopyBlockUnaligned(uploadPtr, src, (uint)sizeInBytes);
 
-        upload.Handle->Unmap(0, (Range*)null);
+        upload.Handle->Unmap(0, (Dx12Range*)null);
 
         // ── 2. Default heap: целевой буфер ───────────────────────────────────
         ComPtr<ID3D12Resource> resource = CreateCommittedBuffer(
@@ -281,8 +292,7 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
     /// Создаёт ресурс на UPLOAD heap и сразу оставляет его постоянно маппированным.
     /// Подходит для данных, обновляемых каждый кадр (CBV, SRV structured).
     /// </summary>
-    private static (ComPtr<ID3D12Resource> Resource, void* MappedPtr)
-        AllocatePersistentMapped(RenderContext ctx, int sizeInBytes)
+    private static PersistentMappedAllocation AllocatePersistentMapped(RenderContext ctx, int sizeInBytes)
     {
         ComPtr<ID3D12Resource> resource = CreateCommittedBuffer(
             ctx, sizeInBytes,
@@ -290,10 +300,10 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
 
         void* mapped;
         SilkMarshal.ThrowHResult(
-            resource.Handle->Map(0, (Range*)null, &mapped));
+            resource.Handle->Map(0, (Dx12Range*)null, &mapped));
 
         // Persistent map: Unmap вызывается только в Dispose()
-        return (resource, mapped);
+        return new PersistentMappedAllocation(resource, mapped);
     }
 
     /// <summary>
@@ -394,7 +404,7 @@ internal sealed unsafe class GpuBuffer<T> : IDisposable where T : unmanaged
         using var waitEvent = new ManualResetEventSlim(initialState: false);
         nint hEvent = waitEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
         SilkMarshal.ThrowHResult(
-            fence.Handle->SetEventOnCompletion(signalValue, hEvent));
+            fence.Handle->SetEventOnCompletion(signalValue, (void*)hEvent));
 
         waitEvent.Wait();
         fence.Dispose();

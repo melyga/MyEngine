@@ -32,12 +32,12 @@ public readonly struct Color
 }
 
 // ── Pending shapes ────────────────────────────────────────────────────────────
-file readonly struct PendingLine   { public Vector3 From, To; public Color Color; }
-file readonly struct PendingSphere { public Vector3 Center; public float Radius; public Color Color; }
-file readonly struct PendingBox    { public Vector3 Center, Half; public Color Color; }
+internal struct PendingLine   { public Vector3 From, To; public Color Color; }
+internal struct PendingSphere { public Vector3 Center; public float Radius; public Color Color; }
+internal struct PendingBox    { public Vector3 Center, Half; public Color Color; }
 
 // ── DebugDraw ─────────────────────────────────────────────────────────────────
-public static class DebugDraw
+internal static class DebugDraw
 {
     private static readonly List<PendingLine>   _lines   = new();
     private static readonly List<PendingSphere> _spheres = new();

@@ -3,6 +3,7 @@
 using DefaultEcs;
 using DefaultEcs.System;
 using MyEngine.Core.Abstractions;
+using MyEngine.Core.ECS.Systems.Update;
 
 namespace MyEngine.Core.Engine;
 
@@ -124,7 +125,6 @@ public sealed class EngineBuilder
             renderer: renderer,
             physics:  physics,
             assets:   new AssetManager(),
-            audio:    new AudioSystem(),
             ui:       new UISystem(),
             events:   new EventBus(),
             input:    new InputManager(),

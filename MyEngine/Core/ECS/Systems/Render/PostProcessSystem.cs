@@ -18,7 +18,7 @@ public sealed class PostProcessSystem : ISystem<float>
         _time     = 0f;
     }
 
-    public void Update(in float state)
+    public void Update(float state)
     {
         _time += state;
         // fix: используем SetTime вместо SetFog-хака

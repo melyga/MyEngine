@@ -192,7 +192,7 @@ public sealed class ParticleSystem : AEntitySetSystem<float>
 
             pool[i].Position += pool[i].Velocity * dt;
             pool[i].Color     = Vector4.Lerp(emitter.ColorStart, emitter.ColorEnd, t);
-            pool[i].Size      = MathF.Lerp(emitter.SizeStart, emitter.SizeEnd, t);
+            pool[i].Size      = emitter.SizeStart + ((emitter.SizeEnd - emitter.SizeStart) * t);
         }
     }
 

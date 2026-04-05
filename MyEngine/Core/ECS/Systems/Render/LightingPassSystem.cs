@@ -22,7 +22,7 @@ public sealed class LightingPassSystem : ISystem<float>
         _renderer = renderer;
     }
 
-    public void Update(in float state)
+    public void Update(float state)
     {
         // Lighting pass запускается внутри Dx12Renderer.EndFrame автоматически.
         // Система передаёт актуальные параметры ambient и fog перед EndFrame,

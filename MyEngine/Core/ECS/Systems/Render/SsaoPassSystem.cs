@@ -17,7 +17,7 @@ public sealed class SsaoPassSystem : ISystem<float>
         _renderer = renderer;
     }
 
-    public void Update(in float state)
+    public void Update(float state)
     {
         // SSAO — внутренний pass рендерера.
         // Система отправляет сигнальный DrawCall с IsShadowPass=false,

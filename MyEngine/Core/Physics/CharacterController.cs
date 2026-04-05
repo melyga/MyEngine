@@ -1,8 +1,10 @@
 // MyEngine.Core/Physics/CharacterController.cs
 #nullable enable
 
-using System.Numerics;
 using BulletSharp;
+using NumVector3 = System.Numerics.Vector3;
+using BtMatrix4x4 = WaveEngine.Mathematics.Matrix4x4;
+using BtVector3 = WaveEngine.Mathematics.Vector3;
 
 namespace MyEngine.Core.Physics;
 
@@ -16,7 +18,7 @@ internal sealed class CharacterController : IDisposable
 
     public CharacterController(
         DiscreteDynamicsWorld world,
-        Vector3 spawnPos,
+        NumVector3 spawnPos,
         float radius = 0.4f,
         float height = 1.0f)
     {
@@ -24,10 +26,10 @@ internal sealed class CharacterController : IDisposable
 
         var shape = new CapsuleShape(radius, height);
 
-        Matrix4x4 startTransform = Matrix4x4.CreateTranslation(spawnPos);
+        BtMatrix4x4 startTransform = BtMatrix4x4.CreateTranslation(new BtVector3(spawnPos.X, spawnPos.Y, spawnPos.Z));
         var motionState = new DefaultMotionState(startTransform);
 
-        shape.CalculateLocalInertia(80f, out Vector3 localInertia);
+        shape.CalculateLocalInertia(80f, out BtVector3 localInertia);
 
         var constructionInfo = new RigidBodyConstructionInfo(80f, motionState, shape, localInertia)
         {
@@ -37,23 +39,23 @@ internal sealed class CharacterController : IDisposable
         Body = new RigidBody(constructionInfo);
         constructionInfo.Dispose();
 
-        Body.AngularFactor      = Vector3.Zero;
+        Body.AngularFactor      = new BtVector3(0f, 0f, 0f);
         Body.ActivationState    = ActivationState.DisableDeactivation;
 
         _world.AddRigidBody(Body);
     }
 
-    public void Move(Vector3 direction, float speed)
+    public void Move(NumVector3 direction, float speed)
     {
         float y = Body.LinearVelocity.Y;
-        Body.LinearVelocity = new Vector3(direction.X * speed, y, direction.Z * speed);
+        Body.LinearVelocity = new BtVector3(direction.X * speed, y, direction.Z * speed);
     }
 
     public void Jump(float impulse)
     {
         if (IsGrounded)
         {
-            Body.ApplyCentralImpulse(Vector3.UnitY * impulse);
+            Body.ApplyCentralImpulse(new BtVector3(0f, impulse, 0f));
         }
     }
 
@@ -62,13 +64,13 @@ internal sealed class CharacterController : IDisposable
         IsGrounded = PerformDownRaycast(0.15f);
     }
 
-    public bool TryStepUp(Vector3 forward, float stepHeight)
+    public bool TryStepUp(NumVector3 forward, float stepHeight)
     {
-        Vector3 position = Body.WorldTransform.Translation;
+        BtVector3 position = Body.WorldTransform.Translation;
 
-        Vector3 dir      = Vector3.Normalize(forward);
-        Vector3 rayStart = position;
-        Vector3 rayEnd   = position + dir * (0.5f + stepHeight);
+        BtVector3 dir      = BtVector3.Normalize(new BtVector3(forward.X, forward.Y, forward.Z));
+        BtVector3 rayStart = position;
+        BtVector3 rayEnd   = position + dir * (0.5f + stepHeight);
 
         using var forwardCb = new ClosestRayResultCallback(ref rayStart, ref rayEnd);
         _world.RayTest(rayStart, rayEnd, forwardCb);
@@ -76,13 +78,13 @@ internal sealed class CharacterController : IDisposable
         if (!forwardCb.HasHit)
             return false;
 
-        float hitDistance = Vector3.Distance(rayStart, rayEnd) * forwardCb.ClosestHitFraction;
+        float hitDistance = BtVector3.Distance(rayStart, rayEnd) * forwardCb.ClosestHitFraction;
 
         if (hitDistance > stepHeight)
             return false;
 
-        Vector3 elevated = position + Vector3.UnitY * stepHeight;
-        Matrix4x4 newTransform = Matrix4x4.CreateTranslation(elevated);
+        BtVector3 elevated = position + new BtVector3(0f, stepHeight, 0f);
+        BtMatrix4x4 newTransform = BtMatrix4x4.CreateTranslation(elevated);
         Body.WorldTransform             = newTransform;
         Body.MotionState.WorldTransform = newTransform;
 
@@ -91,9 +93,9 @@ internal sealed class CharacterController : IDisposable
 
     private bool PerformDownRaycast(float extraDistance)
     {
-        Vector3 position = Body.WorldTransform.Translation;
-        Vector3 rayStart = position;
-        Vector3 rayEnd   = position - Vector3.UnitY * extraDistance;
+        BtVector3 position = Body.WorldTransform.Translation;
+        BtVector3 rayStart = position;
+        BtVector3 rayEnd   = position - new BtVector3(0f, extraDistance, 0f);
 
         using var cb = new ClosestRayResultCallback(ref rayStart, ref rayEnd);
         _world.RayTest(rayStart, rayEnd, cb);

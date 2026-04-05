@@ -165,7 +165,7 @@ internal sealed unsafe class RenderContext : IDisposable
         {
             _fenceEvent.Reset();
             nint hEvent = _fenceEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
-            SilkMarshal.ThrowHResult(_fence.Handle->SetEventOnCompletion(_fenceValue, hEvent));
+            SilkMarshal.ThrowHResult(_fence.Handle->SetEventOnCompletion(_fenceValue, (void*)hEvent));
             _fenceEvent.Wait();
         }
     }

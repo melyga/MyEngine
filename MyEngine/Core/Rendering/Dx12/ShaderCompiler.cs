@@ -1,8 +1,13 @@
 #nullable enable
 
+using System;
+using System.Collections.Generic;
+using System.IO;
 using Silk.NET.Core.Native;
+using Silk.NET.Direct3D.Compilers;
 using System.Runtime.InteropServices;
 using System.Text;
+using DxcBuffer = Silk.NET.Direct3D.Compilers.Buffer;
 
 namespace MyEngine.Core.Rendering.Dx12;
 
@@ -24,7 +29,7 @@ internal sealed unsafe class ShaderCompiler : IDisposable
 
     // ── API и COM-объекты ─────────────────────────────────────────────────────────
 
-    private readonly Dxc _api;
+    private readonly DXC _api;
     private ComPtr<IDxcCompiler3>      _compiler;
     private ComPtr<IDxcUtils>          _utils;
     private ComPtr<IDxcIncludeHandler> _includeHandler;
@@ -38,7 +43,7 @@ internal sealed unsafe class ShaderCompiler : IDisposable
 
     public ShaderCompiler()
     {
-        _api = Dxc.GetApi();
+        _api = DXC.GetApi();
 
         void* ptr;
         Guid  iid;
@@ -46,15 +51,17 @@ internal sealed unsafe class ShaderCompiler : IDisposable
         // IDxcCompiler3
         ptr = null;
         iid = IDxcCompiler3.Guid;
+        Guid clsidCompiler = ClsidDxcCompiler;
         SilkMarshal.ThrowHResult(
-            _api.DxcCreateInstance(ref ClsidDxcCompiler, ref iid, ref ptr));
+            _api.CreateInstance(ref clsidCompiler, ref iid, ref ptr));
         _compiler = new ComPtr<IDxcCompiler3>((IDxcCompiler3*)ptr);
 
         // IDxcUtils (создание source-блобов, include handler)
         ptr = null;
         iid = IDxcUtils.Guid;
+        Guid clsidUtils = ClsidDxcUtils;
         SilkMarshal.ThrowHResult(
-            _api.DxcCreateInstance(ref ClsidDxcUtils, ref iid, ref ptr));
+            _api.CreateInstance(ref clsidUtils, ref iid, ref ptr));
         _utils = new ComPtr<IDxcUtils>((IDxcUtils*)ptr);
 
         // Include handler по умолчанию (обрабатывает #include относительно рабочей директории)

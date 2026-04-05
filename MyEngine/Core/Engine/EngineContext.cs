@@ -2,6 +2,7 @@
 
 using DefaultEcs;
 using MyEngine.Core.Abstractions;
+using MyEngine.Core.ECS.Systems.Update;
 
 namespace MyEngine.Core.Engine;
 
@@ -41,7 +42,6 @@ public sealed class EventBus {
     public void Unsubscribe<T>(Action<T> h) { }
 }
 
-public sealed class TimerSystem  { }
 public sealed class EntityFactory{ }
 
 // Назначение:   Контекст движка — единая точка доступа ко всем подсистемам

@@ -1,6 +1,7 @@
 #nullable enable
 
 using Silk.NET.Core.Native;
+using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using System.Runtime.InteropServices;
@@ -42,6 +43,18 @@ internal sealed unsafe class PipelineBuilder
     private bool               _blendAlpha  = false;
     private CullMode           _cullMode    = CullMode.Back;
     private FillMode           _fillMode    = FillMode.Solid;
+
+    internal readonly struct PipelineBuildResult
+    {
+        public PipelineBuildResult(ID3D12PipelineState* pso, ID3D12RootSignature* root)
+        {
+            PipelineState = pso;
+            RootSignature = root;
+        }
+
+        public ID3D12PipelineState* PipelineState { get; }
+        public ID3D12RootSignature* RootSignature { get; }
+    }
 
     // ── Fluent API ────────────────────────────────────────────────────────────
 
@@ -129,7 +142,7 @@ internal sealed unsafe class PipelineBuilder
     /// Создаёт <see cref="ID3D12RootSignature"/> и <see cref="ID3D12PipelineState"/>.
     /// При сбое создания PSO корневая подпись автоматически освобождается.
     /// </summary>
-    public (ID3D12PipelineState* pso, ID3D12RootSignature* root) Build(RenderContext ctx)
+    public PipelineBuildResult Build(RenderContext ctx)
     {
         if (_vs == null) throw new InvalidOperationException("PipelineBuilder: вершинный шейдер не задан.");
         if (_ps == null) throw new InvalidOperationException("PipelineBuilder: пиксельный шейдер не задан.");
@@ -145,7 +158,7 @@ internal sealed unsafe class PipelineBuilder
             root->Release();
             throw;
         }
-        return (pso, root);
+        return new PipelineBuildResult(pso, root);
     }
 
     // ── Корневая подпись ──────────────────────────────────────────────────────
@@ -192,13 +205,13 @@ internal sealed unsafe class PipelineBuilder
         RootParameter* p = stackalloc RootParameter[ParamCount];
 
         // [0] Inline CBV b0 — MVP + материал (вершинный + пиксельный шейдеры)
-        p[0].ParameterType                       = RootParameterType.Cbv;
+        p[0].ParameterType                       = RootParameterType.TypeCbv;
         p[0].ShaderVisibility                    = ShaderVisibility.All;
         p[0].Anonymous.Descriptor.ShaderRegister = 0;
         p[0].Anonymous.Descriptor.RegisterSpace  = 0;
 
         // [1] Inline CBV b1 — освещение (только пиксельный шейдер)
-        p[1].ParameterType                       = RootParameterType.Cbv;
+        p[1].ParameterType                       = RootParameterType.TypeCbv;
         p[1].ShaderVisibility                    = ShaderVisibility.Pixel;
         p[1].Anonymous.Descriptor.ShaderRegister = 1;
         p[1].Anonymous.Descriptor.RegisterSpace  = 0;
@@ -324,7 +337,7 @@ internal sealed unsafe class PipelineBuilder
         DescriptorRange*    range,
         uint                rangeCount)
     {
-        param.ParameterType                                  = RootParameterType.DescriptorTable;
+        param.ParameterType                                  = RootParameterType.TypeDescriptorTable;
         param.ShaderVisibility                               = visibility;
         param.Anonymous.DescriptorTable.NumDescriptorRanges = rangeCount;
         param.Anonymous.DescriptorTable.PDescriptorRanges   = range;
@@ -458,7 +471,7 @@ internal sealed unsafe class PipelineBuilder
         };
         return new DepthStencilDesc
         {
-            DepthEnable      = _depthEnable ? 1 : 0,
+            DepthEnable      = _depthEnable,
             DepthWriteMask   = _depthWrite ? DepthWriteMask.All : DepthWriteMask.Zero,
             DepthFunc        = ComparisonFunc.LessEqual,
             StencilEnable    = 0,

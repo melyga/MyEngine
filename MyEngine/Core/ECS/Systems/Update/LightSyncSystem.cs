@@ -39,7 +39,7 @@ public sealed class LightSyncSystem : AEntitySetSystem<float>
         // метод не используется — вся логика в Update(float)
     }
 
-    protected override void Update(float deltaTime)
+    protected override void Update(float deltaTime, ReadOnlySpan<Entity> entities)
     {
         var lights = new List<LightData>();
 

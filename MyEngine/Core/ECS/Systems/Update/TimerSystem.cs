@@ -7,6 +7,7 @@ namespace MyEngine.Core.ECS.Systems.Update;
 public interface ITimer{void Cancel();void Reset();bool IsActive{get;}}
 public sealed class TimerSystem : ISystem<float> {
     private readonly List<TimerEntry> _entries=new();
+    public bool IsEnabled { get; set; } = true;
     private struct TimerEntry{public float Delay,Elapsed;public Action Callback;public bool Repeat,Active;}
     private sealed class TimerHandle:ITimer{
         private readonly TimerSystem _o;private readonly int _i;
@@ -15,6 +16,7 @@ public sealed class TimerSystem : ISystem<float> {
         public void Cancel(){if(_i>=_o._entries.Count)return;var e=_o._entries[_i];e.Active=false;_o._entries[_i]=e;}
         public void Reset(){if(_i>=_o._entries.Count)return;var e=_o._entries[_i];e.Elapsed=0f;e.Active=true;_o._entries[_i]=e;}}
     public void Update(float dt){
+        if(!IsEnabled)return;
         for(int i=0;i<_entries.Count;i++){
             var e=_entries[i];if(!e.Active)continue;
             e.Elapsed+=dt;
