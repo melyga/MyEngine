@@ -1,0 +1,973 @@
+================================================================================
+                         MyEngine — Документация
+================================================================================
+
+Версия: master
+Платформа: Windows (DirectX 12)
+Язык: C# / .NET 9.0
+================================================================================
+
+
+СОДЕРЖАНИЕ
+----------
+  1. Обзор архитектуры
+  2. Быстрый старт
+  3. Ядро движка (Core)
+     3.1. EngineBuilder — конфигурация и запуск
+     3.2. EngineContext — контекст подсистем
+     3.3. EngineLoop — игровой цикл
+     3.4. SystemGroup — группы систем
+  4. ECS (Entity Component System)
+     4.1. Компоненты
+     4.2. Теги
+     4.3. Системы обновления (Update Systems)
+     4.4. Системы рендеринга (Render Systems)
+  5. Рендеринг
+     5.1. IRenderer — интерфейс рендерера
+     5.2. DirectX 12 (Dx12Renderer)
+     5.3. GBuffer и Deferred Rendering
+     5.4. Проходы рендеринга (Render Passes)
+  6. Физика
+     6.1. IPhysicsBackend — интерфейс физики
+     6.2. BulletPhysicsBackend
+     6.3. CharacterController
+  7. Система ассетов
+     7.1. IAssetManager и AssetManager
+     7.2. AssetHandle<T>
+     7.3. IModelLoader и ModelData
+  8. Звук
+  9. Ввод (Input)
+ 10. Плагины (IEnginePlugin)
+ 11. Зависимости (NuGet-пакеты)
+ 12. Структура проекта
+
+
+================================================================================
+1. ОБЗОР АРХИТЕКТУРЫ
+================================================================================
+
+MyEngine — модульный игровой движок на C#, построенный вокруг трёх ключевых
+принципов:
+
+  • ECS (Entity Component System) через библиотеку DefaultEcs.
+    Вся игровая логика выражена как компоненты на сущностях и системы,
+    обрабатывающие фильтрованные наборы сущностей.
+
+  • Разделение интерфейсов и реализаций.
+    Ключевые подсистемы (рендерер, физика, загрузчик моделей) скрыты
+    за интерфейсами (IRenderer, IPhysicsBackend, IModelLoader), что позволяет
+    подменять бэкенды без изменения игрового кода.
+
+  • Fluent-конфигурация через EngineBuilder.
+    Вся сборка движка выполняется декларативно в точке входа (Program.cs)
+    без ручного связывания зависимостей.
+
+Общая схема потока данных:
+
+  Program.cs
+      └─► EngineBuilder.Run<TGame>()
+              ├─ создаёт IRenderer, IPhysicsBackend, DefaultEcs.World
+              ├─ инициализирует плагины (IEnginePlugin)
+              ├─ собирает EngineContext
+              └─ запускает EngineLoop (Silk.NET IWindow)
+                      ├─ OnUpdate → SystemGroup.Update() → IGame.OnUpdate()
+                      │       ↳ fixed-timestep → IGame.OnFixedUpdate()
+                      └─ OnRender → SystemGroup.Render() → IGame.OnRender()
+
+
+================================================================================
+2. БЫСТРЫЙ СТАРТ
+================================================================================
+
+Минимальная точка входа (Program.cs):
+
+    using MyEngine.Core.Engine;
+    using MyEngine.Core.Physics;
+    using MyEngine.Core.Rendering.Dx12;
+
+    new EngineBuilder()
+        .WithTitle("Моя игра")
+        .WithResolution(1920, 1080)
+        .WithVSync(true)
+        .WithTargetFps(60)
+        .WithRenderer<Dx12Renderer>()
+        .WithPhysics<BulletPhysicsBackend>()
+        .WithPlugin<MyGamePlugin>()
+        .Run<MyGame>();
+
+Минимальная реализация IGame:
+
+    public sealed class MyGame : IGame
+    {
+        public void OnLoad(EngineContext ctx)
+        {
+            // Создание сущностей, загрузка ассетов
+            Entity player = ctx.EcsWorld.CreateEntity();
+            player.Set(TransformComponent.Default);
+            player.Set(new PlayerTag());
+        }
+
+        public void OnUpdate(EngineContext ctx, float dt)   { }
+        public void OnFixedUpdate(EngineContext ctx, float fixedDt) { }
+        public void OnRender(EngineContext ctx, float dt)   { }
+        public void OnShutdown(EngineContext ctx)           { }
+    }
+
+
+================================================================================
+3. ЯДРО ДВИЖКА (CORE)
+================================================================================
+
+3.1. EngineBuilder — конфигурация и запуск
+------------------------------------------
+Namespace: MyEngine.Core.Engine
+Файл:      Core/Engine/EngineBuilder.cs
+
+Fluent-строитель. Все методы возвращают this, что позволяет цепочку вызовов.
+
+Методы конфигурации:
+
+  WithTitle(string title)
+      Устанавливает заголовок окна. По умолчанию "MyEngine".
+
+  WithResolution(int width, int height)
+      Устанавливает размер окна. По умолчанию 1280×720.
+
+  WithVSync(bool enabled)
+      Включает/выключает вертикальную синхронизацию. По умолчанию true.
+
+  WithTargetFps(int fps)
+      Целевое число кадров в секунду. По умолчанию 60.
+
+  WithRenderer<T>() where T : IRenderer, new()
+      Регистрирует рендерер. Обязателен перед Run().
+
+  WithPhysics<T>() where T : IPhysicsBackend, new()
+      Регистрирует физический бэкенд. Обязателен перед Run().
+
+  WithModelLoader<T>() where T : IModelLoader, new()
+      Добавляет загрузчик 3D-моделей. Можно регистрировать несколько:
+      каждый отвечает за свои расширения файлов (CanLoad).
+
+  WithPlugin<T>() where T : IEnginePlugin, new()
+      Добавляет плагин расширения (см. раздел 10).
+
+  AddSystem<T>() where T : ISystem<float>, new()
+      Добавляет пользовательскую ECS-систему в SystemGroup.
+
+  Run<TGame>() where TGame : IGame, new()
+      Финальный метод: инициализирует все подсистемы, запускает игровой цикл.
+      Блокирует поток до закрытия окна. При завершении вызывает Shutdown()
+      у плагинов и освобождает все ресурсы.
+
+Порядок инициализации внутри Run<TGame>():
+  1. Создание IRenderer и IPhysicsBackend через фабрики.
+  2. Создание DefaultEcs.World.
+  3. Регистрация загрузчиков моделей в ModelLoaderRegistry.
+  4. Вызов Plugin.Register(builder) для каждого плагина.
+  5. Создание SystemGroup и добавление систем из AddSystem<T>().
+  6. Создание EngineContext.
+  7. Вызов Plugin.Initialize(ctx) для каждого плагина.
+  8. Запуск EngineLoop.Run().
+  9. После завершения цикла: Plugin.Shutdown(), Dispose систем и бэкендов.
+
+
+3.2. EngineContext — контекст подсистем
+---------------------------------------
+Namespace: MyEngine.Core.Engine
+Файл:      Core/Engine/EngineContext.cs
+
+Единственная точка доступа ко всем подсистемам движка. Передаётся в методы
+IGame, IEnginePlugin и во все ECS-системы.
+
+Свойства:
+
+  EcsWorld   (DefaultEcs.World)   — ECS-мир: создание сущностей, запросы.
+  Renderer   (IRenderer)          — Рендерер: загрузка GPU-ресурсов, DrawCall.
+  Physics    (IPhysicsBackend)    — Физика: создание тел, raycast, симуляция.
+  Assets     (IAssetManager)      — Менеджер ассетов: регистрация и выборка.
+  UI         (UISystem)           — UI-подсистема.
+  Events     (EventBus)           — Шина событий: Publish / Subscribe.
+  Input      (InputManager)       — Ввод: состояние клавиш и мыши.
+  Debug      (DebugSystem)        — Отладочный вывод и примитивы.
+  Timers     (TimerSystem)        — Таймеры и отложенные вызовы.
+  Factory    (EntityFactory)      — Фабрика сущностей.
+
+Поля, обновляемые каждый кадр EngineLoop:
+  Time        (float)  — суммарное прошедшее время с запуска (секунды).
+  DeltaTime   (float)  — время предыдущего кадра (секунды).
+  FrameCount  (int)    — номер текущего кадра.
+
+EventBus:
+  void Publish<T>(T evt)           — публикация события.
+  void Subscribe<T>(Action<T> h)   — подписка на событие.
+  void Unsubscribe<T>(Action<T> h) — отписка.
+
+
+3.3. EngineLoop — игровой цикл
+------------------------------
+Namespace: MyEngine.Core.Engine
+Файл:      Core/Engine/EngineLoop.cs
+
+Создаёт Silk.NET IWindow и управляет фазами Update / Render.
+Используется исключительно через EngineBuilder.Run<TGame>().
+
+Параметры (EngineConfig):
+  Title     — заголовок окна.
+  Width     — ширина в пикселях.
+  Height    — высота в пикселях.
+  VSync     — вертикальная синхронизация.
+  TargetFps — целевой FPS.
+
+Константы:
+  FixedDt    = 1/60 сек  — шаг фиксированного обновления (физика).
+  MaxFrameDt = 0.1 сек   — максимальный DT для защиты от «spiral of death».
+
+Порядок вызовов каждый кадр:
+  OnUpdate(dt):
+    1. Clamp dt до MaxFrameDt.
+    2. Обновление Time, DeltaTime, FrameCount в EngineContext.
+    3. Цикл fixed-timestep: IGame.OnFixedUpdate() пока накоплено ≥ FixedDt.
+    4. SystemGroup.Update(dt).
+    5. IGame.OnUpdate(dt).
+
+  OnRender(dt):
+    1. IRenderer.BeginFrame().
+    2. SystemGroup.Render(dt).
+    3. IGame.OnRender(dt).
+    4. IRenderer.EndFrame().
+
+
+3.4. SystemGroup — группы систем
+---------------------------------
+Namespace: MyEngine.Core.Engine
+Файл:      Core/Engine/SystemGroup.cs
+
+Контейнер ECS-систем, разделённых на фазу обновления и фазу рендеринга.
+
+Методы:
+  AddUpdate(ISystem<float> system) — добавить в фазу Update.
+  AddRender(ISystem<float> system) — добавить в фазу Render.
+  Update(float dt)                 — вызвать Update на все системы Update-группы.
+  Render(float dt)                 — вызвать Update на все системы Render-группы.
+  Dispose()                        — освободить все IDisposable-системы.
+
+Системы выполняются в порядке регистрации.
+
+
+================================================================================
+4. ECS (Entity Component System)
+================================================================================
+
+Используется библиотека DefaultEcs. Сущности создаются через World.CreateEntity(),
+компоненты добавляются методом entity.Set<TComponent>(value).
+
+4.1. Компоненты
+---------------
+Namespace: MyEngine.Core.ECS.Components
+
+TransformComponent
+  Хранит пространственное состояние сущности.
+  Поля:
+    Vector3    Position    — позиция в мировом пространстве.
+    Quaternion Rotation    — ориентация.
+    Vector3    Scale       — масштаб (1,1,1 по умолчанию).
+    Matrix4x4  WorldMatrix — вычисленная мировая матрица (обновляет TransformSystem).
+  Значение по умолчанию: TransformComponent.Default
+    (Rotation = Identity, Scale = Vector3.One, Position = Zero)
+
+CameraComponent
+  Параметры проекции и матрицы вида/проекции (обновляются CameraSystem).
+  Поля:
+    float     Fov              — поле зрения в градусах (по умолчанию 90°).
+    float     NearPlane        — ближняя плоскость отсечения (0.1 м).
+    float     FarPlane         — дальняя плоскость отсечения (500 м).
+    Matrix4x4 ViewMatrix       — матрица вида.
+    Matrix4x4 ProjectionMatrix — матрица проекции.
+
+MeshComponent
+  Связывает сущность с мешем на GPU.
+  Поля:
+    GpuMeshHandle Mesh       — хэндл загруженного меша.
+    bool          CastShadow — участвует ли сущность в теневом проходе.
+
+MaterialComponent
+  PBR-материал сущности через GPU-хэндлы текстур.
+  Поля:
+    GpuTextureHandle Albedo            — альбедо (baseColor).
+    GpuTextureHandle Normal            — карта нормалей.
+    GpuTextureHandle MetallicRoughness — металличность и шероховатость.
+    GpuTextureHandle Emissive          — самосвечение.
+    float            MetallicFactor    — коэффициент металличности.
+    float            RoughnessFactor   — коэффициент шероховатости.
+    Vector4          BaseColorFactor   — множитель базового цвета.
+    Vector3          EmissiveFactor    — множитель свечения.
+
+PointLightComponent
+  Точечный источник света.
+  Поля: Color (Vector3), Radius (float), Intensity (float).
+
+SpotLightComponent
+  Прожекторный (конусный) источник света.
+  Поля: Color, Direction, InnerAngle, OuterAngle, Radius, Intensity.
+
+DirectionalLightComponent
+  Направленный источник света (солнце).
+  Поля: Color (Vector3), Direction (Vector3), Intensity (float).
+
+RigidBodyComponent
+  Физическое тело, управляемое симуляцией.
+  Поля:
+    PhysicsBodyHandle Body        — хэндл физического тела.
+    bool              IsKinematic — кинематическое тело (не подвергается силам).
+
+CharacterComponent
+  Компонент контроллера персонажа.
+  Поля:
+    float   MoveSpeed     — скорость движения (по умолчанию 4.5 м/с).
+    float   JumpImpulse   — импульс прыжка (5.5 по умолчанию).
+    float   StepHeight    — высота шага (0.35 м).
+    float   SlopeLimit    — максимальный угол склона (45°).
+    bool    IsGrounded    — стоит ли персонаж на земле.
+    bool    IsCrouching   — в приседе ли персонаж.
+    Vector3 MoveDirection — направление движения, задаётся InputSystem.
+
+AnimationComponent
+  Анимация скелета с поддержкой блендинга.
+  Поля:
+    AssetHandle<AnimationClip> CurrentClip  — текущий клип.
+    AssetHandle<AnimationClip> BlendClip    — клип для блендинга.
+    float Speed       — скорость воспроизведения (1.0 = нормальная).
+    float Time        — текущее время в клипе.
+    float BlendWeight — вес блендинга (0..1).
+    bool  Loop        — зациклить воспроизведение.
+    bool  Playing     — идёт ли воспроизведение.
+
+AudioSourceComponent
+  Источник звука на сущности.
+  Поля:
+    AssetHandle<AudioClip> Clip        — аудиоклип.
+    float  Volume      — громкость (0..1, по умолчанию 1.0).
+    float  Pitch       — высота тона (1.0 = нормальная).
+    float  MinDistance — расстояние, с которого начинается затухание.
+    float  MaxDistance — расстояние полного затухания (50 м).
+    bool   Loop        — зациклить воспроизведение.
+    bool   PlayOnStart — начать воспроизведение при загрузке.
+    bool   Is3D        — пространственный звук.
+
+AudioListenerComponent
+  Маркерный компонент: сущность является «ушами» (обычно камера).
+  Без полей.
+
+ParticleEmitterComponent
+  Эмиттер системы частиц.
+  Поля:
+    int     MaxParticles — максимальное число частиц (по умолчанию 1000).
+    float   EmitRate     — частиц в секунду (10).
+    float   Lifetime     — время жизни частицы (2 сек).
+    float   Speed        — начальная скорость (1 м/с).
+    Vector3 Direction    — направление эмиссии (Vector3.UnitY).
+    float   Spread       — разброс конуса эмиссии в градусах (15°).
+    Vector4 ColorStart   — начальный цвет RGBA.
+    Vector4 ColorEnd     — конечный цвет RGBA (прозрачный по умолчанию).
+    float   SizeStart    — начальный размер (0.1 м).
+    float   SizeEnd      — конечный размер (0 м).
+    bool    IsLooping    — зациклить эмиссию.
+    bool    IsPlaying    — активен ли эмиттер.
+
+
+4.2. Теги
+---------
+Теги — пустые структуры для фильтрации сущностей в ECS-запросах.
+
+  PlayerTag         — помечает сущность игрока (цель InputSystem).
+  ViewmodelTag      — сущность принадлежит вьюмодели (оружие от первого лица).
+  CastsShadowTag    — сущность отбрасывает тени.
+  StaticGeometryTag — статическая геометрия (оптимизация запросов).
+  TransparentTag    — прозрачная геометрия (отдельный проход рендеринга).
+  UIEntityTag       — сущность принадлежит UI (исключается из 3D-проходов).
+
+Добавление тега:
+  entity.Set(new PlayerTag());
+
+Запрос с фильтрацией по тегам:
+  world.GetEntities()
+       .With<PlayerTag>()
+       .Without<UIEntityTag>()
+       .AsSet()
+
+
+4.3. Системы обновления (Update Systems)
+-----------------------------------------
+Namespace: MyEngine.Core.ECS.Systems.Update
+
+Все системы наследуют AEntitySetSystem<float> из DefaultEcs.
+
+TransformSystem
+  Пересчитывает WorldMatrix по Position, Rotation, Scale для всех сущностей
+  с TransformComponent.
+
+CameraSystem
+  Вычисляет ViewMatrix и ProjectionMatrix для сущности с CameraComponent
+  и активным тегом. Предоставляет публичные свойства:
+    ViewMatrix, ProjectionMatrix — матрицы текущей камеры.
+    Position, Forward, Right     — мировые векторы камеры.
+  Используется GeometryPassSystem и другими системами рендеринга.
+
+InputSystem
+  Обрабатывает сущности с PlayerTag + CharacterComponent.
+  Читает InputManager (WASD + мышь) и записывает MoveDirection.
+  Публикует JumpRequestedEvent через DefaultEcs World.Publish()
+  при нажатии Space и IsGrounded == true.
+  Переключает ViewmodelLightComponent.IsOn при нажатии F.
+
+CharacterControllerSystem
+  Подписывается на JumpRequestedEvent.
+  Применяет MoveDirection к физическому телу через IPhysicsBackend.
+  Обновляет CharacterComponent.IsGrounded через Physics.IsGrounded().
+
+PhysicsSyncSystem
+  Синхронизирует Physics.GetPosition() / GetRotation() → TransformComponent.
+  Запускается после Physics.Step() (в EngineLoop OnUpdate fixed-timestep).
+
+AnimationSystem
+  Воспроизводит AnimationClip: интерполирует позиции/ротации джойнтов
+  между ключевыми кадрами (lerp/slerp). Поддерживает блендинг двух клипов
+  по BlendWeight. Передаёт результат в IRenderer.SetBoneMatrices().
+
+AudioSystem
+  Управляет воспроизведением AudioSourceComponent через XAudio2 / X3DAudio.
+  Применяет 3D-позиционирование для Is3D-источников относительно
+  AudioListenerComponent.
+
+LightSyncSystem
+  Собирает все источники света (Point, Spot, Directional) в список LightData[]
+  и передаёт его в IRenderer.SetLights().
+
+ParticleSystem
+  Управляет пулами частиц для ParticleEmitterComponent.
+  Спаунит новые частицы (с учётом EmitRate и аккумулятора времени),
+  обновляет Position, Color, Size, Age каждой частицы,
+  деактивирует частицы с Age > Lifetime.
+  Предоставляет GetParticles(entity) → ReadOnlySpan<Particle> для ParticleRenderSystem.
+
+TimerSystem
+  Система таймеров и отложенных вызовов. Доступна через EngineContext.Timers.
+
+ViewmodelSystem
+  Управляет трансформацией и видимостью вьюмодели (ViewmodelTag).
+
+AudioSystem
+  XAudio2 воспроизведение, X3DAudio пространственное позиционирование.
+
+
+4.4. Системы рендеринга (Render Systems)
+-----------------------------------------
+Namespace: MyEngine.Core.ECS.Systems.Render
+
+Все системы вызываются из SystemGroup.Render() между BeginFrame() и EndFrame().
+
+GeometryPassSystem
+  Фильтр: MeshComponent + MaterialComponent + TransformComponent,
+           без ViewmodelTag и UIEntityTag.
+  Действие: SetCamera() + Submit(DrawCall) для каждой непрозрачной сущности.
+
+ShadowPassSystem
+  Фильтр: CastsShadowTag или MeshComponent.CastShadow == true.
+  Действие: Submit(DrawCall{ IsShadowPass = true }).
+
+LightingPassSystem
+  Запускает проход освещения GBuffer с PBR-освещением, тенями и SSAO.
+
+SsaoPassSystem
+  Запускает проход SSAO (Screen-Space Ambient Occlusion).
+
+PostProcessSystem
+  Запускает постобработку: HDR tone mapping, bloom, FXAA.
+  Вызывает IRenderer.SetTime() для эффектов, зависящих от времени.
+
+TransparentPassSystem
+  Фильтр: TransparentTag + MeshComponent + MaterialComponent.
+  Отрисовывает прозрачную геометрию после непрозрачной.
+
+ParticleRenderSystem
+  Получает частицы из ParticleSystem через GetParticles(),
+  формирует ParticleInstance[] и вызывает Submit(ParticleDrawCall).
+
+ViewmodelPassSystem
+  Отрисовывает вьюмодель (ViewmodelTag) с отдельной матрицей проекции.
+
+UIRenderSystem
+  Отрисовывает UI-сущности (UIEntityTag) через Submit(UIDrawCall).
+
+DebugRenderSystem
+  Отрисовывает отладочные примитивы (wireframe, лучи, AABB и т.д.).
+
+
+================================================================================
+5. РЕНДЕРИНГ
+================================================================================
+
+5.1. IRenderer — интерфейс рендерера
+--------------------------------------
+Namespace: MyEngine.Core.Abstractions
+Файл:      Core/Abstractions/IRenderer.cs
+
+Единственная точка входа для всего рендеринга. Скрывает детали DX12.
+
+Управление кадром:
+  void BeginFrame()  — начало кадра (сброс командных листов, переход RT).
+  void EndFrame()    — завершение кадра (Present).
+
+Отправка команд рисования:
+  void Submit(in DrawCall call)         — непрозрачная/прозрачная геометрия.
+  void Submit(in UIDrawCall call)       — UI-квады с текстурой и scissors.
+  void Submit(in ParticleDrawCall call) — инстансинг частиц.
+
+Управление GPU-ресурсами:
+  GpuMeshHandle    LoadMesh(ReadOnlySpan<Vertex> verts, ReadOnlySpan<uint> indices)
+  GpuTextureHandle LoadTexture(ReadOnlySpan<byte> rgba, int w, int h)
+  void UnloadMesh(GpuMeshHandle h)
+  void UnloadTexture(GpuTextureHandle h)
+
+Глобальные параметры сцены:
+  void SetCamera(in CameraData camera)              — матрицы вида/проекции, позиция.
+  void SetLights(ReadOnlySpan<LightData> lights)    — список источников света.
+  void SetBoneMatrices(GpuMeshHandle, ReadOnlySpan<Matrix4x4>) — скелетная анимация.
+  void SetAmbient(Vector3 color)                    — цвет окружающего освещения.
+  void SetFog(Vector3 color, float density)         — параметры тумана.
+  void SetTime(float time)                          — текущее время (для шейдеров).
+
+События:
+  event Action<int,int> OnResized — срабатывает при изменении размера окна.
+
+Структуры команд рисования:
+
+  DrawCall — 3D-геометрия:
+    GpuMeshHandle    Mesh
+    GpuTextureHandle Albedo, Normal, MetallicRoughness, Emissive
+    Matrix4x4        WorldMatrix
+    float            Metallic, Roughness
+    Vector4          BaseColor
+    Vector3          EmissiveFactor
+    bool             IsShadowPass, IsViewmodelPass, IsTransparent
+
+  UIDrawCall — UI-квад:
+    GpuTextureHandle Texture
+    Vertex[]         Vertices
+    uint[]           Indices
+    Rect             Scissors (x, y, width, height)
+
+  ParticleDrawCall — инстансинг частиц:
+    GpuTextureHandle   Texture
+    int                InstanceCount
+    ParticleInstance[] Instances  (Position, Color, Size для каждой частицы)
+
+  CameraData:
+    Matrix4x4 View, Projection
+    Vector3   Position
+    float     Fov, Near, Far
+
+  LightData:
+    LightType Type       (Directional | Point | Spot)
+    Vector3   Position, Direction, Color
+    float     Intensity, Radius, InnerAngle, OuterAngle
+
+
+5.2. DirectX 12 (Dx12Renderer)
+-------------------------------
+Namespace: MyEngine.Core.Rendering.Dx12
+Файл:      Core/Rendering/Dx12/Dx12Renderer.cs
+
+Конкретная реализация IRenderer на DirectX 12 через Silk.NET.
+Регистрируется в EngineBuilder: .WithRenderer<Dx12Renderer>()
+
+Внутренние компоненты:
+  DescriptorHeap   — управление дескрипторными кучами (RTV, DSV, SRV/CBV/UAV).
+  GBuffer          — набор render targets для deferred shading.
+  GpuBuffer        — универсальный GPU-буфер (VB, IB, CB, UAV).
+  GpuTexture2D     — 2D-текстура с мип-уровнями.
+  MeshRegistry     — реестр загруженных мешей.
+  TextureRegistry  — реестр загруженных текстур.
+  PipelineBuilder  — сборка PSO (Pipeline State Objects) и root signatures.
+  RenderContext    — командные листы, синхронизация (fence), swap chain.
+  ShaderCompiler   — компиляция HLSL-шейдеров через DXC.
+
+
+5.3. GBuffer и Deferred Rendering
+----------------------------------
+Файл: Core/Rendering/Dx12/GBuffer.cs
+
+Движок использует deferred rendering (отложенный рендеринг).
+GBuffer содержит несколько render targets:
+
+  Albedo RT      — базовый цвет + альфа.
+  Normal RT      — нормали в мировом пространстве.
+  MetRough RT    — металличность (R) и шероховатость (G).
+  Emissive RT    — карта самосвечения.
+  Depth buffer   — глубина для SSAO и теней.
+
+Проходы рендеринга (последовательность):
+  1. Shadow Pass      — карты теней для источников света.
+  2. Geometry Pass    — заполнение GBuffer непрозрачной геометрией.
+  3. SSAO Pass        — вычисление ambient occlusion.
+  4. Lighting Pass    — PBR-освещение по данным GBuffer.
+  5. Viewmodel Pass   — отдельный проход для оружия от 1-го лица.
+  6. Transparent Pass — прозрачная геометрия поверх.
+  7. Particle Pass    — частицы.
+  8. UI Pass          — интерфейс (2D-квады).
+  9. Post Process     — HDR, bloom, tone mapping, FXAA.
+
+
+5.4. Проходы рендеринга (Render Passes)
+----------------------------------------
+Файлы: Core/Rendering/Dx12/Passes/
+
+GeometryPass   — запись MRT: albedo, normal, metalrough, emissive.
+ShadowPass     — depth-only рендер с точки зрения источника света.
+SsaoPass       — SSAO: выборка полусферы по нормалям и глубине.
+LightingPass   — освещение: PBR BRDF, PCF-тени, SSAO-маска.
+TransparentPass — OIT или сортировка по глубине прозрачных объектов.
+ParticlePass   — инстансинговый рендер билбордов частиц.
+ViewmodelPass  — рендер модели оружия с отдельной матрицей проекции.
+UIPass         — 2D-рендер UI с scissors.
+PostProcessPass — HDR tone mapping (ACES), bloom, FXAA, виньетка.
+LightManager   — сборка и передача буфера источников света в шейдеры.
+
+
+================================================================================
+6. ФИЗИКА
+================================================================================
+
+6.1. IPhysicsBackend — интерфейс физики
+----------------------------------------
+Namespace: MyEngine.Core.Abstractions
+Файл:      Core/Abstractions/IPhysicsBackend.cs
+
+Абстрагирует физическую симуляцию. Подменяется без изменений игрового кода.
+
+  void Step(float dt)
+      Выполнить один шаг симуляции (вызывается EngineLoop в fixed-timestep).
+
+  PhysicsBodyHandle CreateCapsule(float radius, float height, float mass, Vector3 position)
+      Создать тело-капсулу (для персонажей).
+
+  PhysicsBodyHandle CreateBox(Vector3 halfExtents, float mass, Vector3 position)
+      Создать тело-параллелепипед.
+
+  PhysicsBodyHandle CreateStaticMesh(ReadOnlySpan<Vector3> vertices, ReadOnlySpan<int> indices)
+      Создать статическое тело из произвольной геометрии (mass = 0).
+
+  void Remove(PhysicsBodyHandle handle)
+      Удалить тело из симуляции.
+
+  void SetLinearVelocity(PhysicsBodyHandle h, Vector3 v)
+  void ApplyImpulse(PhysicsBodyHandle h, Vector3 impulse)
+  void SetPosition(PhysicsBodyHandle h, Vector3 pos)
+  void SetAngularFactor(PhysicsBodyHandle h, Vector3 factor)
+
+  Vector3    GetPosition(PhysicsBodyHandle h)
+  Quaternion GetRotation(PhysicsBodyHandle h)
+  Vector3    GetLinearVelocity(PhysicsBodyHandle h)
+  bool       IsGrounded(PhysicsBodyHandle h)
+
+  bool Raycast(Vector3 from, Vector3 direction, float maxDistance, out RaycastHit hit)
+      Трассировка луча. RaycastHit содержит: Point, Normal, Distance, Entity.
+
+
+6.2. BulletPhysicsBackend
+--------------------------
+Namespace: MyEngine.Core.Physics
+Файл:      Core/Physics/BulletPhysicsBackend.cs
+
+Реализует IPhysicsBackend через BulletSharp (Bullet Physics).
+
+  Гравитация: 9.81 м/с² вниз по оси Y (задаётся в конструкторе).
+  Broadphase:  DbvtBroadphase (AABB-дерево).
+  Solver:      SequentialImpulseConstraintSolver (стандартный SI-решатель).
+
+Регистрация: .WithPhysics<BulletPhysicsBackend>()
+
+Конвертация координат между System.Numerics и WaveEngine.Mathematics
+выполняется автоматически внутри бэкенда (ToBullet / ToNumerics).
+
+
+6.3. CharacterController
+-------------------------
+Namespace: MyEngine.Core.Physics
+Файл:      Core/Physics/CharacterController.cs
+
+Высокоуровневый контроллер персонажа поверх IPhysicsBackend.
+Используется CharacterControllerSystem вместе с CharacterComponent.
+
+Функциональность:
+  — Движение по поверхностям с учётом SlopeLimit.
+  — Шаговое преодоление препятствий (StepHeight).
+  — Прыжок через ApplyImpulse.
+  — Определение IsGrounded через raycast вниз.
+
+
+================================================================================
+7. СИСТЕМА АССЕТОВ
+================================================================================
+
+7.1. IAssetManager и AssetManager
+-----------------------------------
+Namespace: MyEngine.Core.Abstractions / MyEngine.Core.Engine
+Файлы:     Core/Abstractions/IAssetManager.cs, Core/Engine/AssetManager.cs
+
+  void Register<T>(AssetHandle<T> handle, T asset) where T : class
+      Зарегистрировать ассет под заданным хэндлом.
+
+  bool TryGet<T>(AssetHandle<T> handle, out T? asset) where T : class
+      Попытаться получить ассет. Возвращает false, если не найден.
+
+  T? Resolve<T>(AssetHandle<T> handle) where T : class
+      То же, что TryGet, но возвращает null вместо out-параметра.
+
+Внутреннее хранилище: Dictionary<(Type, int), object>.
+
+
+7.2. AssetHandle<T>
+---------------------
+Namespace: MyEngine.Core.Abstractions
+Файл:      Core/Abstractions/AssetHandle.cs
+
+Типизированный дескриптор ассета с целочисленным ID.
+  AssetHandle<T>.Invalid — невалидный (нулевой) хэндл.
+  bool IsValid           — true, если хэндл не нулевой.
+  int  Id                — числовой идентификатор.
+
+
+7.3. IModelLoader и ModelData
+------------------------------
+Namespace: MyEngine.Core.Abstractions
+Файл:      Core/Abstractions/IModelLoader.cs
+
+IModelLoader:
+  bool      CanLoad(string fileExtension) — поддерживает ли загрузчик расширение.
+  ModelData Load(string path)             — загрузить модель из файла.
+
+ModelData:
+  MeshData[]          Meshes     — меши (вершины, индексы, индекс материала).
+  MaterialData[]      Materials  — материалы (пиксели текстур, PBR-параметры).
+  AnimationClipData[] Animations — анимационные клипы.
+  NodeData[]          Hierarchy  — иерархия узлов сцены.
+
+Vertex (структура, sequential layout):
+  Vector3  Position      — позиция вершины.
+  Vector3  Normal        — нормаль.
+  Vector2  TexCoord      — UV-координаты.
+  Vector4  Tangent       — касательная (для normal mapping).
+  Vector4  BlendWeights  — веса скелетной анимации.
+  Vector4I BlendIndices  — индексы джойнтов.
+
+Регистрация нескольких загрузчиков:
+  .WithModelLoader<GltfModelLoader>()
+  .WithModelLoader<AssimpModelLoader>()
+
+Выбор загрузчика происходит автоматически по расширению файла через CanLoad().
+
+
+================================================================================
+8. ЗВУК
+================================================================================
+
+Файл: Core/ECS/Systems/Update/AudioSystem.cs
+
+Движок использует XAudio2 (SharpDX.XAudio2) для воспроизведения звука
+и X3DAudio для пространственного позиционирования.
+
+AudioClip (ассет):
+  float[] Samples    — PCM-сэмплы.
+  int     SampleRate — частота дискретизации (напр., 44100).
+  int     Channels   — количество каналов (1 = моно, 2 = стерео).
+  float   Duration   — длительность в секундах (вычисляется автоматически).
+
+AudioSourceComponent — источник звука (см. раздел 4.1).
+AudioListenerComponent — «уши» (обычно камера).
+
+Пространственный звук активируется при Is3D = true.
+Затухание: линейное между MinDistance и MaxDistance.
+
+
+================================================================================
+9. ВВОД (INPUT)
+================================================================================
+
+Файл: Core/ECS/Systems/Update/InputSystem.cs
+
+InputManager предоставляется через EngineContext.Input:
+
+  bool    IsKeyDown(Key k)            — нажата ли клавиша (Silk.NET.Input.Key).
+  bool    IsMouseButton(MouseButton b) — нажата ли кнопка мыши.
+  Vector2 MouseDelta                  — смещение мыши за последний кадр.
+
+Стандартные клавиши управления персонажем:
+  W / S — вперёд / назад (относительно направления камеры).
+  A / D — влево / вправо.
+  Space — прыжок (публикует JumpRequestedEvent).
+  F     — переключение подствольного фонаря (ViewmodelLightComponent).
+
+
+================================================================================
+10. ПЛАГИНЫ (IEnginePlugin)
+================================================================================
+
+Namespace: MyEngine.Core.Abstractions
+Файл:      Core/Abstractions/IEnginePlugin.cs
+
+Механизм расширения движка без изменения его ядра.
+
+Интерфейс:
+  string Name      { get; }                          — уникальное имя плагина.
+  void Register(EngineBuilder builder)               — вызывается до создания систем.
+  void Initialize(EngineContext ctx)                 — после инициализации всех систем.
+  void Shutdown(EngineContext ctx)                   — при остановке движка.
+
+Пример плагина:
+
+    public sealed class PhysicsDebugPlugin : IEnginePlugin
+    {
+        public string Name => "PhysicsDebug";
+
+        public void Register(EngineBuilder builder)
+        {
+            builder.AddSystem<PhysicsDebugSystem>();
+        }
+
+        public void Initialize(EngineContext ctx)
+        {
+            // Подписка на события
+        }
+
+        public void Shutdown(EngineContext ctx)
+        {
+            // Освобождение ресурсов
+        }
+    }
+
+Регистрация: .WithPlugin<PhysicsDebugPlugin>()
+
+
+================================================================================
+11. ЗАВИСИМОСТИ (NuGet-ПАКЕТЫ)
+================================================================================
+
+Файл: MyEngine/MyEngine.csproj
+Цель: .NET 9.0
+
+  DefaultEcs                    0.17.2        ECS-фреймворк.
+  Silk.NET                      2.23.0        Оконная система, ввод, HLSL-компилятор.
+  Silk.NET.Core                 2.23.0        Базовые типы Silk.NET.
+  Silk.NET.Direct3D12           2.23.0        Биндинги DirectX 12.
+  Silk.NET.Direct3D.Compilers   2.23.0        DXC-компилятор шейдеров.
+  Silk.NET.DXGI                 2.23.0        DXGI (swap chain, адаптеры).
+  BulletSharpPInvoke            3.3.0.8617-p  Bullet Physics (C# обёртка).
+  SharpDX.XAudio2               4.2.0         XAudio2 / X3DAudio (звук).
+
+Флаги компиляции:
+  AllowUnsafeBlocks = true   — для unsafe-кода в GPU-буферах и Bullet.
+  Nullable = enable          — строгая nullable-аннотация по всему проекту.
+
+
+================================================================================
+12. СТРУКТУРА ПРОЕКТА
+================================================================================
+
+MyEngine-master/
+├── MyEngine.slnx                     — файл решения
+└── MyEngine/
+    ├── MyEngine.csproj
+    └── Core/
+        ├── Abstractions/             — публичные интерфейсы и DTO
+        │   ├── IGame.cs
+        │   ├── IEnginePlugin.cs
+        │   ├── IRenderer.cs
+        │   ├── IPhysicsBackend.cs
+        │   ├── IAssetManager.cs
+        │   ├── IModelLoader.cs
+        │   ├── AssetHandle.cs
+        │   ├── GpuHandles.cs
+        │   ├── PhysicsBodyHandle.cs
+        │   ├── RaycastHit.cs
+        │   └── ForwardReferences.cs
+        │
+        ├── ECS/
+        │   ├── Components/           — ECS-компоненты и теги
+        │   │   ├── TransformComponent.cs
+        │   │   ├── CameraComponent.cs
+        │   │   ├── MeshComponent.cs
+        │   │   ├── MaterialComponent.cs
+        │   │   ├── LightComponents.cs
+        │   │   ├── PhysicsComponents.cs
+        │   │   ├── AnimationComponent.cs
+        │   │   ├── AudioComponents.cs
+        │   │   ├── ParticleEmitterComponent.cs
+        │   │   ├── ViewmodelLightComponent.cs
+        │   │   └── Tags.cs
+        │   └── Systems/
+        │       ├── Update/           — системы логики (Update-фаза)
+        │       │   ├── TransformSystem.cs
+        │       │   ├── CameraSystem.cs
+        │       │   ├── InputSystem.cs
+        │       │   ├── CharacterControllerSystem.cs
+        │       │   ├── PhysicsSyncSystem.cs
+        │       │   ├── AnimationSystem.cs
+        │       │   ├── AudioSystem.cs
+        │       │   ├── LightSyncSystem.cs
+        │       │   ├── ParticleSystem.cs
+        │       │   ├── TimerSystem.cs
+        │       │   └── ViewmodelSystem.cs
+        │       └── Render/           — системы рендеринга (Render-фаза)
+        │           ├── GeometryPassSystem.cs
+        │           ├── ShadowPassSystem.cs
+        │           ├── LightingPassSystem.cs
+        │           ├── SsaoPassSystem.cs
+        │           ├── PostProcessSystem.cs
+        │           ├── TransparentPassSystem.cs
+        │           ├── ParticleRenderSystem.cs
+        │           ├── ViewmodelPassSystem.cs
+        │           ├── UIRenderSystem.cs
+        │           └── DebugRenderSystem.cs
+        │
+        ├── Engine/                   — ядро: Builder, Loop, Context, системы
+        │   ├── EngineBuilder.cs
+        │   ├── EngineContext.cs
+        │   ├── EngineLoop.cs
+        │   ├── SystemGroup.cs
+        │   ├── AssetManager.cs
+        │   ├── DebugSystem.cs
+        │   └── UISystem.cs
+        │
+        ├── Physics/                  — физический бэкенд
+        │   ├── BulletPhysicsBackend.cs
+        │   └── CharacterController.cs
+        │
+        └── Rendering/
+            └── Dx12/                 — DirectX 12 рендерер
+                ├── Dx12Renderer.cs
+                ├── GBuffer.cs
+                ├── GpuBuffer.cs
+                ├── GpuTexture2D.cs
+                ├── DescriptorHeap.cs
+                ├── MeshRegistry.cs
+                ├── TextureRegistry.cs
+                ├── PipelineBuilder.cs
+                ├── RenderContext.cs
+                ├── ShaderCompiler.cs
+                └── Passes/
+                    ├── GeometryPass.cs
+                    ├── ShadowPass.cs
+                    ├── SsaoPass.cs
+                    ├── LightingPass.cs
+                    ├── LightManager.cs
+                    ├── TransparentPass.cs
+                    ├── ParticlePass.cs
+                    ├── ViewmodelPass.cs
+                    ├── UIPass.cs
+                    └── PostProcessPass.cs
+
+================================================================================
+                              Конец документации
+================================================================================
